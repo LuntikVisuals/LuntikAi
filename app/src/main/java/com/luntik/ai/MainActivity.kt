@@ -229,10 +229,9 @@ class LuntikViewModel : ViewModel() {
 
         when {
             lower in listOf("привет", "хай", "здравствуй", "здравствуйте") -> {
-                val reply = styleReply("Привет! Рад тебя видеть. Чем займёмся?")
                 messages = messages + ChatMessage(
                     role = "ai",
-                    content = reply,
+                    content = styleReply("Привет! Рад тебя видеть. Чем займёмся?"),
                     confidence = 92,
                     actions = listOf("Распознал приветствие", "Выбрал дружелюбный тон")
                 )
@@ -248,10 +247,9 @@ class LuntikViewModel : ViewModel() {
                 return
             }
             lower.contains("анализ") && (lower.contains("диалог") || lower.contains("чат") || lower.contains("разговор")) -> {
-                val analysis = analyzeDialog()
                 messages = messages + ChatMessage(
                     role = "ai",
-                    content = styleReply(analysis),
+                    content = styleReply(analyzeDialog()),
                     confidence = 85,
                     actions = listOf(
                         "Открыл историю диалога",
@@ -334,6 +332,7 @@ class LuntikViewModel : ViewModel() {
             actions += "Учёл предыдущий контекст диалога"
         }
 
+        actions += "Перефразировал знания под вопрос и контекст"
         actions += "Применил личность: ${personality.title}"
         actions += "Сформировал гипотезы с вероятностями"
 
@@ -359,25 +358,24 @@ class LuntikViewModel : ViewModel() {
         val confidence = if (best == null) 12
         else ((best.second * 80) + 15).toInt().coerceIn(10, 92)
 
+        val secondSnippet = top.getOrNull(1)?.let { extractSnippet(it.first.text, tokens) }
+
         var answer = if (best == null) {
             "Пока не нашёл достаточно близкой информации. Добавь больше текстов или уточни вопрос."
         } else {
-            var text = extractSnippet(best.first.text, tokens)
-            if (recentUser.size > 1) {
-                text = "Учитывая наш разговор…\n\n$text"
-            }
-            if (feedbackNotes.any { it.contains("сухо") || it.contains("непонятно") }) {
-                text = "Попробую объяснить понятнее:\n\n$text"
-            }
-            if (fileHits.isNotEmpty()) {
-                text += "\n\nТакже есть связанный файл: «${fileHits.first().name}»."
-            }
-            if (confidence >= 60) {
-                text += listOf("", "\n\nМогу рассказать подробнее.", "\n\nПродолжим эту тему?").random()
-            } else if (confidence < 35) {
-                text += "\n\n(Уверенность пока невысокая)"
-            }
-            text
+            val rawSnippet = extractSnippet(best.first.text, tokens)
+            paraphraseForDialog(
+                question = question,
+                knowledge = rawSnippet,
+                extraKnowledge = secondSnippet,
+                recentUser = recentUser,
+                confidence = confidence,
+                fileName = fileHits.firstOrNull()?.name
+            )
+        }
+
+        if (feedbackNotes.any { it.contains("сухо") || it.contains("непонятно") }) {
+            answer = "Попробую объяснить проще и понятнее.\n\n$answer"
         }
 
         answer = styleReply(answer)
@@ -391,6 +389,55 @@ class LuntikViewModel : ViewModel() {
             actions = actions
         )
         isThinking = false
+    }
+
+    /** Перефразирует знания под вопрос и контекст диалога, а не вставляет сырой кусок. */
+    private fun paraphraseForDialog(
+        question: String,
+        knowledge: String,
+        extraKnowledge: String?,
+        recentUser: List<String>,
+        confidence: Int,
+        fileName: String?
+    ): String {
+        val q = question.trim()
+        val qLower = q.lowercase()
+        val fact = knowledge.trim().trimEnd('.', '!', '?')
+        val extra = extraKnowledge?.trim()?.trimEnd('.', '!', '?')
+
+        val lead = when {
+            recentUser.size > 1 -> "Учитывая, о чём мы говорили, "
+            qLower.startsWith("что такое") || qLower.startsWith("что это") -> "Если коротко по твоему вопросу: "
+            qLower.startsWith("как") -> "По твоему вопросу «как…» вот как это можно понять: "
+            qLower.startsWith("почему") || qLower.startsWith("зачем") -> "По сути причина такая: "
+            qLower.contains("расскажи") || qLower.contains("объясни") -> "Объясню своими словами: "
+            else -> "По твоему вопросу вот что получается: "
+        }
+
+        var body = lead + fact
+        if (!body.endsWith('.') && !body.endsWith('!') && !body.endsWith('?')) {
+            body += "."
+        }
+
+        if (!extra.isNullOrBlank() && extra.length > 20 && !fact.contains(extra.take(30))) {
+            body += " Ещё важный момент: $extra."
+        }
+
+        if (!fileName.isNullOrBlank()) {
+            body += " К этой теме ещё относится файл «$fileName»."
+        }
+
+        body += when {
+            confidence >= 60 -> listOf(
+                "",
+                " Если нужно — раскрою подробнее.",
+                " Можем копнуть глубже, если хочешь."
+            ).random()
+            confidence < 35 -> " Честно, уверенность здесь невысокая — данных маловато."
+            else -> ""
+        }
+
+        return body
     }
 
     private fun styleReply(raw: String): String {
@@ -951,6 +998,17 @@ fun MessageBubble(
                         },
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                // Дисклеймер после ответа ИИ
+                if (msg.role == "ai") {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Luntik-ai это ии и он может ошибаться.",
+                        color = TextMuted.copy(alpha = 0.75f),
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp
                     )
                 }
 
