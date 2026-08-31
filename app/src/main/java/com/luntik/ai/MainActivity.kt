@@ -114,7 +114,6 @@ class LuntikViewModel : ViewModel() {
 
     var input by mutableStateOf("")
 
-    // Dialogs
     var showKnowledgeList by mutableStateOf(false)
     var showAddDialog by mutableStateOf(false)
     var showEditDialog by mutableStateOf(false)
@@ -192,7 +191,7 @@ class LuntikViewModel : ViewModel() {
         }
     }
 
-    fun setPersonality(p: Personality) {
+    fun selectPersonality(p: Personality) {
         personality = p
         messages = messages + ChatMessage(
             role = "system",
@@ -228,12 +227,15 @@ class LuntikViewModel : ViewModel() {
 
         val lower = q.lowercase()
 
-        // Быстрые команды
         when {
             lower in listOf("привет", "хай", "здравствуй", "здравствуйте") -> {
                 val reply = styleReply("Привет! Рад тебя видеть. Чем займёмся?")
-                messages = messages + ChatMessage(role = "ai", content = reply, confidence = 92,
-                    actions = listOf("Распознал приветствие", "Выбрал дружелюбный тон"))
+                messages = messages + ChatMessage(
+                    role = "ai",
+                    content = reply,
+                    confidence = 92,
+                    actions = listOf("Распознал приветствие", "Выбрал дружелюбный тон")
+                )
                 return
             }
             lower.contains("как дела") || lower.contains("как ты") -> {
@@ -317,13 +319,9 @@ class LuntikViewModel : ViewModel() {
         }.sortedByDescending { it.second }
 
         val top = scored.take(3).filter { it.second > 0 }
-        actions += if (top.isEmpty()) {
-            "Релевантных знаний не найдено"
-        } else {
-            "Нашёл ${top.size} релевантных фрагмента"
-        }
+        actions += if (top.isEmpty()) "Релевантных знаний не найдено"
+        else "Нашёл ${top.size} релевантных фрагмента"
 
-        // Учёт файлов
         val fileHits = chatFiles.filter { f ->
             tokens.any { f.name.lowercase().contains(it) || f.content.lowercase().contains(it) }
         }
@@ -331,7 +329,6 @@ class LuntikViewModel : ViewModel() {
             actions += "Проверил файлы чата — совпадений: ${fileHits.size}"
         }
 
-        // Память диалога
         val recentUser = messages.filter { it.role == "user" }.takeLast(3).map { it.content }
         if (recentUser.size > 1) {
             actions += "Учёл предыдущий контекст диалога"
@@ -366,7 +363,6 @@ class LuntikViewModel : ViewModel() {
             "Пока не нашёл достаточно близкой информации. Добавь больше текстов или уточни вопрос."
         } else {
             var text = extractSnippet(best.first.text, tokens)
-            // Добавим кусок контекста диалога если есть
             if (recentUser.size > 1) {
                 text = "Учитывая наш разговор…\n\n$text"
             }
@@ -478,7 +474,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
     }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
-        // Top bar
         Row(
             Modifier.fillMaxWidth().background(SurfaceC).statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -493,7 +488,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             )
         }
 
-        // Messages
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -510,7 +504,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             }
         }
 
-        // Toolbar
         Row(
             Modifier.fillMaxWidth().background(SurfaceC).padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -525,7 +518,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             ) { Text("Обучить", fontSize = 12.sp) }
         }
 
-        // Input
         Row(
             Modifier.fillMaxWidth().background(SurfaceC).navigationBarsPadding().padding(10.dp),
             verticalAlignment = Alignment.Bottom
@@ -554,7 +546,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         }
     }
 
-    // === Knowledge list ===
     if (vm.showKnowledgeList) {
         AlertDialog(
             onDismissRequest = { vm.showKnowledgeList = false },
@@ -602,7 +593,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         )
     }
 
-    // Add knowledge
     if (vm.showAddDialog) {
         SourceEditDialog(
             title = "Новый источник",
@@ -620,7 +610,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         )
     }
 
-    // Edit knowledge
     if (vm.showEditDialog && vm.editingSource != null) {
         val src = vm.editingSource!!
         SourceEditDialog(
@@ -646,7 +635,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         )
     }
 
-    // Files list
     if (vm.showFilesList) {
         AlertDialog(
             onDismissRequest = { vm.showFilesList = false },
@@ -696,7 +684,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         )
     }
 
-    // Create file
     if (vm.showCreateFileDialog) {
         AlertDialog(
             onDismissRequest = { vm.showCreateFileDialog = false },
@@ -731,7 +718,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         )
     }
 
-    // View file
     vm.viewingFile?.let { f ->
         AlertDialog(
             onDismissRequest = { vm.viewingFile = null },
@@ -749,7 +735,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         )
     }
 
-    // Personality
     if (vm.showPersonalityDialog) {
         AlertDialog(
             onDismissRequest = { vm.showPersonalityDialog = false },
@@ -761,7 +746,7 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
                             Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    vm.setPersonality(p)
+                                    vm.selectPersonality(p)
                                     vm.showPersonalityDialog = false
                                 }
                                 .padding(vertical = 10.dp),
@@ -782,7 +767,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         )
     }
 
-    // Feedback
     if (vm.showFeedbackDialog) {
         AlertDialog(
             onDismissRequest = { vm.showFeedbackDialog = false },
@@ -902,7 +886,6 @@ fun MessageBubble(
                     Spacer(Modifier.height(3.dp))
                 }
 
-                // Agent actions
                 if (!msg.actions.isNullOrEmpty()) {
                     Surface(
                         color = ActionBg,
@@ -919,7 +902,6 @@ fun MessageBubble(
                     }
                 }
 
-                // Thinking
                 if (!msg.thinking.isNullOrEmpty()) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.25f),
