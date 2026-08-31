@@ -5,16 +5,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ThumbDown
-import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,9 +43,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Colors
 val Bg = Color(0xFF0C0E12)
-val Surface = Color(0xFF161A22)
+val SurfaceC = Color(0xFF161A22)
 val Surface2 = Color(0xFF1E2430)
 val Accent = Color(0xFF6EE7B7)
 val TextMain = Color(0xFFE6E9EF)
@@ -53,20 +53,15 @@ val UserBubble = Color(0xFF2D3A55)
 val AiBubble = Color(0xFF1A2030)
 val Danger = Color(0xFFF87171)
 val Warn = Color(0xFFFBBF24)
+val ActionBg = Color(0xFF1A2A22)
 
-@Composable
-fun LuntikTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Accent,
-            background = Bg,
-            surface = Surface,
-            onPrimary = Bg,
-            onBackground = TextMain,
-            onSurface = TextMain
-        ),
-        content = content
-    )
+enum class Personality(val title: String, val emoji: String, val style: String) {
+    NONE("Обычный ИИ", "🤖", "нейтральный, полезный, без лишней эмоции"),
+    HORROR("Хоррор", "👻", "мрачный, жуткий, атмосферный, иногда пугающий"),
+    EGOIST("Эгоист", "👑", "самоуверенный, ставит себя выше, снисходительный"),
+    VILLAIN("Злодей", "😈", "злорадный, хитрый, говорит как антагонист"),
+    KIND("Добряк", "😇", "добрый, заботливый, поддерживающий, мягкий"),
+    CUTE("Милый", "🥺", "милый, нежный, использует тёплые слова и эмодзи")
 }
 
 data class ChatMessage(
@@ -75,6 +70,7 @@ data class ChatMessage(
     val content: String,
     val confidence: Int? = null,
     val thinking: List<Pair<String, Int>>? = null,
+    val actions: List<String>? = null,
     val feedback: String? = null
 )
 
@@ -84,12 +80,19 @@ data class KnowledgeSource(
     val text: String
 )
 
+data class ChatFile(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val content: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 class LuntikViewModel : ViewModel() {
     var messages by mutableStateOf(
         listOf(
             ChatMessage(
                 role = "system",
-                content = "Привет! Я LuntikAi.\n\n1. Нажми + и добавь тексты\n2. Нажми «Обучить»\n3. Задавай вопросы\n\nЯ буду думать с вероятностями и учитывать лайки/дизлайки."
+                content = "Привет! Я LuntikAi v0.2\n\n• Добавляй и редактируй знания\n• Я помню диалог и могу его анализировать\n• Работаю как агент — пишу действия перед ответом\n• Могу создавать файлы в чате\n• Выбери личность или оставь обычный режим"
             )
         )
     )
@@ -98,18 +101,34 @@ class LuntikViewModel : ViewModel() {
     var sources by mutableStateOf(listOf<KnowledgeSource>())
         private set
 
+    var chatFiles by mutableStateOf(listOf<ChatFile>())
+        private set
+
     var isTrained by mutableStateOf(false)
         private set
 
     var isThinking by mutableStateOf(false)
         private set
 
+    var personality by mutableStateOf(Personality.NONE)
+
     var input by mutableStateOf("")
 
+    // Dialogs
+    var showKnowledgeList by mutableStateOf(false)
     var showAddDialog by mutableStateOf(false)
+    var showEditDialog by mutableStateOf(false)
+    var editingSource by mutableStateOf<KnowledgeSource?>(null)
     var newSourceName by mutableStateOf("")
     var newSourceText by mutableStateOf("")
 
+    var showFilesList by mutableStateOf(false)
+    var showCreateFileDialog by mutableStateOf(false)
+    var newFileName by mutableStateOf("")
+    var newFileContent by mutableStateOf("")
+    var viewingFile by mutableStateOf<ChatFile?>(null)
+
+    var showPersonalityDialog by mutableStateOf(false)
     var showFeedbackDialog by mutableStateOf(false)
     var feedbackMsgId by mutableStateOf<String?>(null)
     var feedbackComment by mutableStateOf("")
@@ -129,6 +148,20 @@ class LuntikViewModel : ViewModel() {
         )
     }
 
+    fun updateSource(id: String, name: String, text: String) {
+        sources = sources.map {
+            if (it.id == id) it.copy(name = name.ifBlank { it.name }, text = text) else it
+        }
+        isTrained = false
+        messages = messages + ChatMessage(role = "system", content = "Источник обновлён. Нужно переобучить.")
+    }
+
+    fun deleteSource(id: String) {
+        sources = sources.filter { it.id != id }
+        isTrained = false
+        messages = messages + ChatMessage(role = "system", content = "Источник удалён. Нужно переобучить.")
+    }
+
     fun train() {
         if (sources.isEmpty()) {
             messages = messages + ChatMessage(role = "system", content = "Сначала добавь хотя бы один текст.")
@@ -137,8 +170,54 @@ class LuntikViewModel : ViewModel() {
         isTrained = true
         messages = messages + ChatMessage(
             role = "system",
-            content = "Обучение завершено! Источников: ${sources.size}. Можно задавать вопросы."
+            content = "Обучение завершено! Источников: ${sources.size}. Файлов: ${chatFiles.size}."
         )
+    }
+
+    fun createFile(name: String, content: String) {
+        val n = name.ifBlank { "file_${chatFiles.size + 1}.txt" }
+        val file = ChatFile(name = n, content = content)
+        chatFiles = chatFiles + file
+        messages = messages + ChatMessage(
+            role = "system",
+            content = "📄 Создан файл «$n» (${content.length} символов)"
+        )
+    }
+
+    fun deleteFile(id: String) {
+        val f = chatFiles.find { it.id == id }
+        chatFiles = chatFiles.filter { it.id != id }
+        if (f != null) {
+            messages = messages + ChatMessage(role = "system", content = "Файл «${f.name}» удалён.")
+        }
+    }
+
+    fun setPersonality(p: Personality) {
+        personality = p
+        messages = messages + ChatMessage(
+            role = "system",
+            content = "Личность: ${p.emoji} ${p.title}"
+        )
+    }
+
+    fun analyzeDialog(): String {
+        val userMsgs = messages.filter { it.role == "user" }
+        val aiMsgs = messages.filter { it.role == "ai" }
+        val topics = userMsgs.takeLast(10).joinToString(" | ") { it.content.take(40) }
+        return buildString {
+            append("Анализ диалога:\n")
+            append("• Сообщений пользователя: ${userMsgs.size}\n")
+            append("• Ответов ИИ: ${aiMsgs.size}\n")
+            append("• Источников знаний: ${sources.size}\n")
+            append("• Файлов в чате: ${chatFiles.size}\n")
+            append("• Личность: ${personality.title}\n")
+            if (userMsgs.isNotEmpty()) {
+                append("• Последние темы: ${topics.ifBlank { "—" }}\n")
+            }
+            val likes = messages.count { it.feedback == "like" }
+            val dislikes = messages.count { it.feedback == "dislike" }
+            append("• Лайки: $likes · Дизлайки: $dislikes")
+        }
     }
 
     fun send() {
@@ -148,28 +227,67 @@ class LuntikViewModel : ViewModel() {
         messages = messages + ChatMessage(role = "user", content = q)
 
         val lower = q.lowercase()
-        if (lower in listOf("привет", "хай", "здравствуй", "здравствуйте")) {
-            messages = messages + ChatMessage(
-                role = "ai",
-                content = "Привет! Рад тебя видеть. Как дела?",
-                confidence = 92
-            )
-            return
-        }
-        if (lower.contains("как дела") || lower.contains("как ты")) {
-            messages = messages + ChatMessage(
-                role = "ai",
-                content = "У меня всё хорошо, спасибо! А у тебя как?",
-                confidence = 90
-            )
-            return
+
+        // Быстрые команды
+        when {
+            lower in listOf("привет", "хай", "здравствуй", "здравствуйте") -> {
+                val reply = styleReply("Привет! Рад тебя видеть. Чем займёмся?")
+                messages = messages + ChatMessage(role = "ai", content = reply, confidence = 92,
+                    actions = listOf("Распознал приветствие", "Выбрал дружелюбный тон"))
+                return
+            }
+            lower.contains("как дела") || lower.contains("как ты") -> {
+                messages = messages + ChatMessage(
+                    role = "ai",
+                    content = styleReply("Всё хорошо, на связи и готов работать. А у тебя как?"),
+                    confidence = 90,
+                    actions = listOf("Прочитал вопрос о состоянии", "Сформировал ответ")
+                )
+                return
+            }
+            lower.contains("анализ") && (lower.contains("диалог") || lower.contains("чат") || lower.contains("разговор")) -> {
+                val analysis = analyzeDialog()
+                messages = messages + ChatMessage(
+                    role = "ai",
+                    content = styleReply(analysis),
+                    confidence = 85,
+                    actions = listOf(
+                        "Открыл историю диалога",
+                        "Подсчитал сообщения",
+                        "Проанализировал темы",
+                        "Собрал статистику фидбека"
+                    )
+                )
+                return
+            }
+            lower.startsWith("создай файл") || lower.startsWith("создать файл") || lower.contains("сделай файл") -> {
+                val name = Regex("файл[ае]?\\s+[«\"]?([\\wА-Яа-я.\\-]+)", RegexOption.IGNORE_CASE)
+                    .find(q)?.groupValues?.getOrNull(1) ?: "note_${chatFiles.size + 1}.txt"
+                val content = q.substringAfter(":").ifBlank {
+                    q.substringAfter("файл").trim().ifBlank { "Пустой файл, созданный агентом." }
+                }
+                createFile(name, content)
+                messages = messages + ChatMessage(
+                    role = "ai",
+                    content = styleReply("Готово. Файл «$name» создан в чате. Можешь открыть его в списке файлов."),
+                    confidence = 88,
+                    actions = listOf(
+                        "Понял запрос на создание файла",
+                        "Сгенерировал имя: $name",
+                        "Записал содержимое",
+                        "Сохранил файл в чат"
+                    )
+                )
+                return
+            }
         }
 
         if (!isTrained || sources.isEmpty()) {
             messages = messages + ChatMessage(
                 role = "ai",
-                content = "Я ещё не обучен. Добавь тексты через + и нажми «Обучить».",
-                confidence = 5
+                content = styleReply("Я ещё не обучен. Добавь тексты в знания и нажми «Обучить»."),
+                confidence = 5,
+                actions = listOf("Проверил базу знаний", "База пуста — обучение не выполнено")
             )
             return
         }
@@ -178,99 +296,132 @@ class LuntikViewModel : ViewModel() {
     }
 
     suspend fun finishThinking(question: String) {
-        delay(400)
+        delay(500)
+
+        val actions = mutableListOf<String>()
+        actions += "Получил вопрос пользователя"
+        actions += "Открыл память диалога (${messages.count { it.role == "user" }} сообщений)"
+        actions += "Просканировал базу знаний (${sources.size} источников)"
 
         val tokens = question.lowercase()
             .split(Regex("[^\\p{L}\\p{N}]+"))
-            .filter { token -> token.length > 1 }
+            .filter { it.length > 1 }
+
+        actions += "Токенизировал запрос (${tokens.size} слов)"
 
         val scored = sources.map { src ->
             val textLower = src.text.lowercase()
-            val score = if (tokens.isEmpty()) {
-                0.0
-            } else {
-                tokens.count { token -> textLower.contains(token) }.toDouble() / tokens.size
-            }
+            val score = if (tokens.isEmpty()) 0.0
+            else tokens.count { textLower.contains(it) }.toDouble() / tokens.size
             src to score
-        }.sortedByDescending { pair -> pair.second }
+        }.sortedByDescending { it.second }
 
-        val top = scored.take(3).filter { pair -> pair.second > 0 }
+        val top = scored.take(3).filter { it.second > 0 }
+        actions += if (top.isEmpty()) {
+            "Релевантных знаний не найдено"
+        } else {
+            "Нашёл ${top.size} релевантных фрагмента"
+        }
+
+        // Учёт файлов
+        val fileHits = chatFiles.filter { f ->
+            tokens.any { f.name.lowercase().contains(it) || f.content.lowercase().contains(it) }
+        }
+        if (fileHits.isNotEmpty()) {
+            actions += "Проверил файлы чата — совпадений: ${fileHits.size}"
+        }
+
+        // Память диалога
+        val recentUser = messages.filter { it.role == "user" }.takeLast(3).map { it.content }
+        if (recentUser.size > 1) {
+            actions += "Учёл предыдущий контекст диалога"
+        }
+
+        actions += "Применил личность: ${personality.title}"
+        actions += "Сформировал гипотезы с вероятностями"
 
         val thinking = if (top.isEmpty()) {
             listOf("Прямого совпадения нет" to 70, "Мало данных по теме" to 30)
         } else {
-            val total = top.sumOf { pair -> pair.second }.coerceAtLeast(0.01)
+            val total = top.sumOf { it.second }.coerceAtLeast(0.01)
             top.map { (src, sc) ->
                 val pct = ((sc / total) * 100).toInt().coerceIn(5, 90)
-                val snippet = src.text.take(80).replace("\n", " ") +
-                    if (src.text.length > 80) "…" else ""
+                val snippet = src.text.take(70).replace("\n", " ") + if (src.text.length > 70) "…" else ""
                 snippet to pct
             }
         }
 
-        val sum = thinking.sumOf { pair -> pair.second }
+        val sum = thinking.sumOf { it.second }
         val normalized = if (sum > 0 && thinking.isNotEmpty()) {
-            thinking.mapIndexed { index, (text, pct) ->
-                if (index == 0) text to (pct + (100 - sum)).coerceAtLeast(5) else text to pct
+            thinking.mapIndexed { i, (t, p) ->
+                if (i == 0) t to (p + (100 - sum)).coerceAtLeast(5) else t to p
             }
-        } else {
-            thinking
-        }
+        } else thinking
 
         val best = top.firstOrNull()
-        val confidence = if (best == null) {
-            12
-        } else {
-            ((best.second * 80) + 15).toInt().coerceIn(10, 92)
-        }
+        val confidence = if (best == null) 12
+        else ((best.second * 80) + 15).toInt().coerceIn(10, 92)
 
-        val answer = if (best == null) {
-            "Пока не нашёл достаточно близкой информации. Добавь больше текстов по теме."
+        var answer = if (best == null) {
+            "Пока не нашёл достаточно близкой информации. Добавь больше текстов или уточни вопрос."
         } else {
             var text = extractSnippet(best.first.text, tokens)
-            if (feedbackNotes.any { note -> note.contains("сухо") || note.contains("непонятно") }) {
+            // Добавим кусок контекста диалога если есть
+            if (recentUser.size > 1) {
+                text = "Учитывая наш разговор…\n\n$text"
+            }
+            if (feedbackNotes.any { it.contains("сухо") || it.contains("непонятно") }) {
                 text = "Попробую объяснить понятнее:\n\n$text"
             }
+            if (fileHits.isNotEmpty()) {
+                text += "\n\nТакже есть связанный файл: «${fileHits.first().name}»."
+            }
             if (confidence >= 60) {
-                text += listOf(
-                    "",
-                    "\n\nМогу рассказать подробнее.",
-                    "\n\nА что ты об этом думаешь?"
-                ).random()
+                text += listOf("", "\n\nМогу рассказать подробнее.", "\n\nПродолжим эту тему?").random()
             } else if (confidence < 35) {
                 text += "\n\n(Уверенность пока невысокая)"
             }
             text
         }
 
+        answer = styleReply(answer)
+        actions += "Отправил ответ пользователю"
+
         messages = messages + ChatMessage(
             role = "ai",
             content = answer,
             confidence = confidence,
-            thinking = normalized
+            thinking = normalized,
+            actions = actions
         )
         isThinking = false
     }
 
+    private fun styleReply(raw: String): String {
+        return when (personality) {
+            Personality.NONE -> raw
+            Personality.HORROR -> "В тишине раздаётся шёпот…\n\n$raw\n\n…ты ведь это слышишь?"
+            Personality.EGOIST -> "Очевидно же. Слушай внимательно, я объясню как есть:\n\n$raw\n\nЗапомни, ты услышал это от лучшего."
+            Personality.VILLAIN -> "Ха… интересный вопрос.\n\n$raw\n\nНадеюсь, ты готов к последствиям своих любопытств."
+            Personality.KIND -> "Конечно, с радостью помогу 💛\n\n$raw\n\nЕсли что-то непонятно — спрашивай, я рядом."
+            Personality.CUTE -> "Хехе, давай разберём вместе~\n\n$raw\n\nТы молодец, что спросил 🥺✨"
+        }
+    }
+
     private fun extractSnippet(text: String, tokens: List<String>): String {
         val sentences = text.split(Regex("[.!?\n]+"))
-            .map { s -> s.trim() }
-            .filter { s -> s.length > 15 }
+            .map { it.trim() }
+            .filter { it.length > 15 }
         if (sentences.isEmpty()) return text.take(300)
         val best = sentences.maxByOrNull { s ->
-            tokens.count { token -> s.lowercase().contains(token) }
+            tokens.count { s.lowercase().contains(it) }
         } ?: sentences.first()
         return if (best.length > 400) best.take(400) + "…" else best
     }
 
     fun like(msgId: String) {
-        messages = messages.map { msg ->
-            if (msg.id == msgId) msg.copy(feedback = "like") else msg
-        }
-        messages = messages + ChatMessage(
-            role = "system",
-            content = "👍 Спасибо! Буду стараться отвечать так же."
-        )
+        messages = messages.map { if (it.id == msgId) it.copy(feedback = "like") else it }
+        messages = messages + ChatMessage(role = "system", content = "👍 Спасибо! Учту.")
     }
 
     fun openDislike(msgId: String) {
@@ -282,23 +433,33 @@ class LuntikViewModel : ViewModel() {
     fun submitDislike() {
         val id = feedbackMsgId ?: return
         val comment = feedbackComment.trim()
-        messages = messages.map { msg ->
-            if (msg.id == id) msg.copy(feedback = "dislike") else msg
-        }
+        messages = messages.map { if (it.id == id) it.copy(feedback = "dislike") else it }
         if (comment.isNotEmpty()) {
             feedbackNotes.add(comment.lowercase())
             messages = messages + ChatMessage(
                 role = "system",
-                content = "Понял замечание: «$comment». Буду учитывать."
+                content = "Понял: «$comment». Буду учитывать."
             )
         } else {
-            messages = messages + ChatMessage(
-                role = "system",
-                content = "Понял, ответ не зашёл."
-            )
+            messages = messages + ChatMessage(role = "system", content = "Понял, ответ не зашёл.")
         }
         showFeedbackDialog = false
     }
+}
+
+@Composable
+fun LuntikTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = Accent,
+            background = Bg,
+            surface = SurfaceC,
+            onPrimary = Bg,
+            onBackground = TextMain,
+            onSurface = TextMain
+        ),
+        content = content
+    )
 }
 
 @Composable
@@ -306,94 +467,74 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
     val listState = rememberLazyListState()
 
     LaunchedEffect(vm.messages.size) {
-        if (vm.messages.isNotEmpty()) {
-            listState.animateScrollToItem(vm.messages.lastIndex)
-        }
+        if (vm.messages.isNotEmpty()) listState.animateScrollToItem(vm.messages.lastIndex)
     }
 
     LaunchedEffect(vm.isThinking) {
         if (vm.isThinking) {
-            val lastUser = vm.messages.lastOrNull { msg -> msg.role == "user" }?.content ?: ""
+            val lastUser = vm.messages.lastOrNull { it.role == "user" }?.content ?: ""
             vm.finishThinking(lastUser)
         }
     }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
+        // Top bar
         Row(
-            Modifier
-                .fillMaxWidth()
-                .background(Surface)
-                .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().background(SurfaceC).statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("🌱 LuntikAi", color = Accent, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text("🌱 LuntikAi", color = Accent, fontWeight = FontWeight.Bold, fontSize = 17.sp)
             Spacer(Modifier.weight(1f))
             Text(
-                if (vm.isTrained) "обучен · ${vm.sources.size}" else "не обучен",
+                "${vm.personality.emoji} · ${if (vm.isTrained) "обучен" else "не обучен"}",
                 color = TextMuted,
-                fontSize = 12.sp
+                fontSize = 11.sp
             )
         }
 
+        // Messages
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(vm.messages, key = { msg -> msg.id }) { msg ->
-                MessageBubble(
-                    msg = msg,
-                    onLike = { vm.like(msg.id) },
-                    onDislike = { vm.openDislike(msg.id) }
-                )
+            items(vm.messages, key = { it.id }) { msg ->
+                MessageBubble(msg, onLike = { vm.like(msg.id) }, onDislike = { vm.openDislike(msg.id) })
             }
             if (vm.isThinking) {
                 item {
-                    Text(
-                        "💭 Думаю…",
-                        color = TextMuted,
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(8.dp)
-                    )
+                    Text("💭 Агент думает…", color = TextMuted, fontSize = 13.sp, modifier = Modifier.padding(8.dp))
                 }
             }
         }
 
+        // Toolbar
         Row(
-            Modifier
-                .fillMaxWidth()
-                .background(Surface)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.fillMaxWidth().background(SurfaceC).padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            OutlinedButton(onClick = { vm.showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Знания")
-            }
+            SmallBtn("Знания", Icons.Default.MenuBook) { vm.showKnowledgeList = true }
+            SmallBtn("Файлы", Icons.Default.Folder) { vm.showFilesList = true }
+            SmallBtn("Личность", Icons.Default.Face) { vm.showPersonalityDialog = true }
             Button(
                 onClick = { vm.train() },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Bg)
-            ) {
-                Text("Обучить")
-            }
+            ) { Text("Обучить", fontSize = 12.sp) }
         }
 
+        // Input
         Row(
-            Modifier
-                .fillMaxWidth()
-                .background(Surface)
-                .navigationBarsPadding()
-                .padding(12.dp),
+            Modifier.fillMaxWidth().background(SurfaceC).navigationBarsPadding().padding(10.dp),
             verticalAlignment = Alignment.Bottom
         ) {
             OutlinedTextField(
                 value = vm.input,
-                onValueChange = { value -> vm.input = value },
+                onValueChange = { vm.input = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Напиши сообщение…", color = TextMuted) },
+                placeholder = { Text("Сообщение или «создай файл …»", color = TextMuted, fontSize = 13.sp) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Accent,
                     unfocusedBorderColor = Surface2,
@@ -408,51 +549,240 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
                 onClick = { vm.send() },
                 colors = IconButtonDefaults.iconButtonColors(containerColor = Accent)
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Отправить",
-                    tint = Bg
-                )
+                Icon(Icons.AutoMirrored.Filled.Send, "Отправить", tint = Bg)
             }
         }
     }
 
-    if (vm.showAddDialog) {
+    // === Knowledge list ===
+    if (vm.showKnowledgeList) {
         AlertDialog(
-            onDismissRequest = { vm.showAddDialog = false },
-            title = { Text("Добавить знания") },
+            onDismissRequest = { vm.showKnowledgeList = false },
+            title = { Text("Знания (${vm.sources.size})") },
+            text = {
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    if (vm.sources.isEmpty()) {
+                        Text("Пока пусто", color = TextMuted)
+                    } else {
+                        vm.sources.forEach { src ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
+                                    vm.editingSource = src
+                                    vm.newSourceName = src.name
+                                    vm.newSourceText = src.text
+                                    vm.showEditDialog = true
+                                    vm.showKnowledgeList = false
+                                },
+                                colors = CardDefaults.cardColors(containerColor = Surface2)
+                            ) {
+                                Column(Modifier.padding(10.dp)) {
+                                    Text(src.name, fontWeight = FontWeight.SemiBold, color = TextMain)
+                                    Text(
+                                        src.text.take(80) + if (src.text.length > 80) "…" else "",
+                                        color = TextMuted,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = {
+                        vm.showKnowledgeList = false
+                        vm.newSourceName = ""
+                        vm.newSourceText = ""
+                        vm.showAddDialog = true
+                    }) { Text("Добавить") }
+                    TextButton(onClick = { vm.showKnowledgeList = false }) { Text("Закрыть") }
+                }
+            }
+        )
+    }
+
+    // Add knowledge
+    if (vm.showAddDialog) {
+        SourceEditDialog(
+            title = "Новый источник",
+            name = vm.newSourceName,
+            text = vm.newSourceText,
+            onName = { vm.newSourceName = it },
+            onText = { vm.newSourceText = it },
+            onSave = {
+                vm.addSource(vm.newSourceName, vm.newSourceText)
+                vm.newSourceName = ""
+                vm.newSourceText = ""
+                vm.showAddDialog = false
+            },
+            onCancel = { vm.showAddDialog = false }
+        )
+    }
+
+    // Edit knowledge
+    if (vm.showEditDialog && vm.editingSource != null) {
+        val src = vm.editingSource!!
+        SourceEditDialog(
+            title = "Редактировать",
+            name = vm.newSourceName,
+            text = vm.newSourceText,
+            onName = { vm.newSourceName = it },
+            onText = { vm.newSourceText = it },
+            onSave = {
+                vm.updateSource(src.id, vm.newSourceName, vm.newSourceText)
+                vm.showEditDialog = false
+                vm.editingSource = null
+            },
+            onCancel = {
+                vm.showEditDialog = false
+                vm.editingSource = null
+            },
+            onDelete = {
+                vm.deleteSource(src.id)
+                vm.showEditDialog = false
+                vm.editingSource = null
+            }
+        )
+    }
+
+    // Files list
+    if (vm.showFilesList) {
+        AlertDialog(
+            onDismissRequest = { vm.showFilesList = false },
+            title = { Text("Файлы чата (${vm.chatFiles.size})") },
+            text = {
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    if (vm.chatFiles.isEmpty()) {
+                        Text("Файлов пока нет. Напиши: создай файл заметка.txt", color = TextMuted, fontSize = 13.sp)
+                    } else {
+                        vm.chatFiles.forEach { f ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
+                                    vm.viewingFile = f
+                                    vm.showFilesList = false
+                                },
+                                colors = CardDefaults.cardColors(containerColor = Surface2)
+                            ) {
+                                Row(
+                                    Modifier.padding(10.dp).fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("📄 ${f.name}", fontWeight = FontWeight.SemiBold, color = TextMain)
+                                        Text("${f.content.length} символов", color = TextMuted, fontSize = 11.sp)
+                                    }
+                                    IconButton(onClick = { vm.deleteFile(f.id) }) {
+                                        Icon(Icons.Default.Delete, null, tint = Danger, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = {
+                        vm.showFilesList = false
+                        vm.newFileName = ""
+                        vm.newFileContent = ""
+                        vm.showCreateFileDialog = true
+                    }) { Text("Создать") }
+                    TextButton(onClick = { vm.showFilesList = false }) { Text("Закрыть") }
+                }
+            }
+        )
+    }
+
+    // Create file
+    if (vm.showCreateFileDialog) {
+        AlertDialog(
+            onDismissRequest = { vm.showCreateFileDialog = false },
+            title = { Text("Новый файл") },
             text = {
                 Column {
                     OutlinedTextField(
-                        value = vm.newSourceName,
-                        onValueChange = { value -> vm.newSourceName = value },
-                        label = { Text("Название") },
+                        value = vm.newFileName,
+                        onValueChange = { vm.newFileName = it },
+                        label = { Text("Имя файла") },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
-                        value = vm.newSourceText,
-                        onValueChange = { value -> vm.newSourceText = value },
-                        label = { Text("Текст") },
-                        modifier = Modifier.fillMaxWidth().height(160.dp),
+                        value = vm.newFileContent,
+                        onValueChange = { vm.newFileContent = it },
+                        label = { Text("Содержимое") },
+                        modifier = Modifier.fillMaxWidth().height(140.dp),
                         maxLines = 8
                     )
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    vm.addSource(vm.newSourceName, vm.newSourceText)
-                    vm.newSourceName = ""
-                    vm.newSourceText = ""
-                    vm.showAddDialog = false
-                }) { Text("Добавить") }
+                    vm.createFile(vm.newFileName, vm.newFileContent)
+                    vm.showCreateFileDialog = false
+                }) { Text("Создать") }
             },
             dismissButton = {
-                TextButton(onClick = { vm.showAddDialog = false }) { Text("Отмена") }
+                TextButton(onClick = { vm.showCreateFileDialog = false }) { Text("Отмена") }
             }
         )
     }
 
+    // View file
+    vm.viewingFile?.let { f ->
+        AlertDialog(
+            onDismissRequest = { vm.viewingFile = null },
+            title = { Text("📄 ${f.name}") },
+            text = {
+                Text(
+                    f.content.ifBlank { "(пусто)" },
+                    color = TextMain,
+                    modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.viewingFile = null }) { Text("Закрыть") }
+            }
+        )
+    }
+
+    // Personality
+    if (vm.showPersonalityDialog) {
+        AlertDialog(
+            onDismissRequest = { vm.showPersonalityDialog = false },
+            title = { Text("Личность") },
+            text = {
+                Column {
+                    Personality.entries.forEach { p ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    vm.setPersonality(p)
+                                    vm.showPersonalityDialog = false
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("${p.emoji}  ${p.title}", color = TextMain, fontSize = 15.sp)
+                            if (vm.personality == p) {
+                                Spacer(Modifier.weight(1f))
+                                Text("✓", color = Accent)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.showPersonalityDialog = false }) { Text("Закрыть") }
+            }
+        )
+    }
+
+    // Feedback
     if (vm.showFeedbackDialog) {
         AlertDialog(
             onDismissRequest = { vm.showFeedbackDialog = false },
@@ -460,8 +790,8 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             text = {
                 OutlinedTextField(
                     value = vm.feedbackComment,
-                    onValueChange = { value -> vm.feedbackComment = value },
-                    placeholder = { Text("Например: слишком сухо, не по теме…") },
+                    onValueChange = { vm.feedbackComment = it },
+                    placeholder = { Text("слишком сухо, не по теме…") },
                     modifier = Modifier.fillMaxWidth()
                 )
             },
@@ -473,6 +803,66 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             }
         )
     }
+}
+
+@Composable
+fun SmallBtn(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+    ) {
+        Icon(icon, null, Modifier.size(14.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(label, fontSize = 11.sp)
+    }
+}
+
+@Composable
+fun SourceEditDialog(
+    title: String,
+    name: String,
+    text: String,
+    onName: (String) -> Unit,
+    onText: (String) -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: (() -> Unit)? = null
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = onName,
+                    label = { Text("Название") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onText,
+                    label = { Text("Текст") },
+                    modifier = Modifier.fillMaxWidth().height(180.dp),
+                    maxLines = 12
+                )
+            }
+        },
+        confirmButton = {
+            Row {
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete) {
+                        Text("Удалить", color = Danger)
+                    }
+                }
+                Button(onClick = onSave) { Text("Сохранить") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("Отмена") }
+        }
+    )
 }
 
 @Composable
@@ -493,7 +883,7 @@ fun MessageBubble(
         }
     ) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(14.dp),
             color = when {
                 isUser -> UserBubble
                 isSystem -> Color.Transparent
@@ -501,46 +891,59 @@ fun MessageBubble(
             },
             modifier = Modifier.widthIn(max = 340.dp)
         ) {
-            Column(Modifier.padding(12.dp)) {
+            Column(Modifier.padding(11.dp)) {
                 if (!isSystem) {
                     Text(
                         if (isUser) "Ты" else "LuntikAi",
                         color = TextMuted,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Medium
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(3.dp))
                 }
 
+                // Agent actions
+                if (!msg.actions.isNullOrEmpty()) {
+                    Surface(
+                        color = ActionBg,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    ) {
+                        Column(Modifier.padding(8.dp)) {
+                            Text("⚡ Действия агента", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(4.dp))
+                            msg.actions.forEach { a ->
+                                Text("• $a", color = TextMuted, fontSize = 11.sp, lineHeight = 15.sp)
+                            }
+                        }
+                    }
+                }
+
+                // Thinking
                 if (!msg.thinking.isNullOrEmpty()) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.25f),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                     ) {
-                        Column(Modifier.padding(10.dp)) {
-                            Text("💭 Раздумье", color = TextMuted, fontSize = 11.sp)
-                            Spacer(Modifier.height(6.dp))
-                            msg.thinking.forEach { (text, pct) ->
+                        Column(Modifier.padding(8.dp)) {
+                            Text("💭 Раздумье", color = TextMuted, fontSize = 10.sp)
+                            Spacer(Modifier.height(4.dp))
+                            msg.thinking.forEach { (t, p) ->
                                 Row(
-                                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    Modifier.fillMaxWidth().padding(vertical = 1.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
+                                    Text(t, color = TextMain, fontSize = 12.sp, modifier = Modifier.weight(1f))
                                     Text(
-                                        text,
-                                        color = TextMain,
-                                        fontSize = 13.sp,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Text(
-                                        "$pct%",
+                                        "$p%",
                                         color = when {
-                                            pct >= 45 -> Accent
-                                            pct >= 25 -> Warn
+                                            p >= 45 -> Accent
+                                            p >= 25 -> Warn
                                             else -> Danger
                                         },
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
+                                        fontSize = 12.sp
                                     )
                                 }
                             }
@@ -551,12 +954,12 @@ fun MessageBubble(
                 Text(
                     msg.content,
                     color = if (isSystem) TextMuted else TextMain,
-                    fontSize = if (isSystem) 13.sp else 15.sp,
-                    lineHeight = 20.sp
+                    fontSize = if (isSystem) 12.sp else 14.sp,
+                    lineHeight = 19.sp
                 )
 
                 if (msg.confidence != null) {
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         "Уверенность: ${msg.confidence}%",
                         color = when {
@@ -564,41 +967,29 @@ fun MessageBubble(
                             msg.confidence >= 25 -> Warn
                             else -> Danger
                         },
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
 
                 if (msg.role == "ai") {
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = onLike, contentPadding = PaddingValues(4.dp)) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = onLike, contentPadding = PaddingValues(2.dp)) {
                             Icon(
-                                Icons.Default.ThumbUp,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
+                                Icons.Default.ThumbUp, null, Modifier.size(14.dp),
                                 tint = if (msg.feedback == "like") Accent else TextMuted
                             )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                "Лайк",
-                                color = if (msg.feedback == "like") Accent else TextMuted,
-                                fontSize = 12.sp
-                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text("Лайк", color = if (msg.feedback == "like") Accent else TextMuted, fontSize = 11.sp)
                         }
-                        TextButton(onClick = onDislike, contentPadding = PaddingValues(4.dp)) {
+                        TextButton(onClick = onDislike, contentPadding = PaddingValues(2.dp)) {
                             Icon(
-                                Icons.Default.ThumbDown,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
+                                Icons.Default.ThumbDown, null, Modifier.size(14.dp),
                                 tint = if (msg.feedback == "dislike") Danger else TextMuted
                             )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                "Дизлайк",
-                                color = if (msg.feedback == "dislike") Danger else TextMuted,
-                                fontSize = 12.sp
-                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text("Дизлайк", color = if (msg.feedback == "dislike") Danger else TextMuted, fontSize = 11.sp)
                         }
                     }
                 }
