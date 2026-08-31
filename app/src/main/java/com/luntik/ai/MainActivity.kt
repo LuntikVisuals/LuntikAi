@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material3.*
@@ -27,7 +26,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -73,7 +71,7 @@ fun LuntikTheme(content: @Composable () -> Unit) {
 
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
-    val role: String, // user / ai / system
+    val role: String,
     val content: String,
     val confidence: Int? = null,
     val thinking: List<Pair<String, Int>>? = null,
@@ -120,9 +118,15 @@ class LuntikViewModel : ViewModel() {
 
     fun addSource(name: String, text: String) {
         if (text.isBlank()) return
-        sources = sources + KnowledgeSource(name = name.ifBlank { "Источник ${sources.size + 1}" }, text = text)
+        sources = sources + KnowledgeSource(
+            name = name.ifBlank { "Источник ${sources.size + 1}" },
+            text = text
+        )
         isTrained = false
-        messages = messages + ChatMessage(role = "system", content = "Добавлен источник «${name.ifBlank { "без названия" }}». Нажми «Обучить».")
+        messages = messages + ChatMessage(
+            role = "system",
+            content = "Добавлен источник «${name.ifBlank { "без названия" }}». Нажми «Обучить»."
+        )
     }
 
     fun train() {
@@ -143,14 +147,21 @@ class LuntikViewModel : ViewModel() {
         input = ""
         messages = messages + ChatMessage(role = "user", content = q)
 
-        // Простые приветствия
         val lower = q.lowercase()
         if (lower in listOf("привет", "хай", "здравствуй", "здравствуйте")) {
-            messages = messages + ChatMessage(role = "ai", content = "Привет! Рад тебя видеть. Как дела?", confidence = 92)
+            messages = messages + ChatMessage(
+                role = "ai",
+                content = "Привет! Рад тебя видеть. Как дела?",
+                confidence = 92
+            )
             return
         }
         if (lower.contains("как дела") || lower.contains("как ты")) {
-            messages = messages + ChatMessage(role = "ai", content = "У меня всё хорошо, спасибо! А у тебя как?", confidence = 90)
+            messages = messages + ChatMessage(
+                role = "ai",
+                content = "У меня всё хорошо, спасибо! А у тебя как?",
+                confidence = 90
+            )
             return
         }
 
@@ -163,54 +174,69 @@ class LuntikViewModel : ViewModel() {
             return
         }
 
-        // Имитация раздумья
         isThinking = true
     }
 
     suspend fun finishThinking(question: String) {
         delay(400)
 
-        val tokens = question.lowercase().split(Regex("[^\\p{L}\\p{N}]+").toRegex()).filter { it.length > 1 }
+        val tokens = question.lowercase()
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { token -> token.length > 1 }
+
         val scored = sources.map { src ->
             val textLower = src.text.lowercase()
-            val score = tokens.count { textLower.contains(it) }.toDouble() / (tokens.size.coerceAtLeast(1))
+            val score = if (tokens.isEmpty()) {
+                0.0
+            } else {
+                tokens.count { token -> textLower.contains(token) }.toDouble() / tokens.size
+            }
             src to score
-        }.sortedByDescending { it.second }
+        }.sortedByDescending { pair -> pair.second }
 
-        val top = scored.take(3).filter { it.second > 0 }
+        val top = scored.take(3).filter { pair -> pair.second > 0 }
 
         val thinking = if (top.isEmpty()) {
             listOf("Прямого совпадения нет" to 70, "Мало данных по теме" to 30)
         } else {
-            val total = top.sumOf { it.second }.coerceAtLeast(0.01)
-            top.mapIndexed { i, (src, sc) ->
+            val total = top.sumOf { pair -> pair.second }.coerceAtLeast(0.01)
+            top.map { (src, sc) ->
                 val pct = ((sc / total) * 100).toInt().coerceIn(5, 90)
-                val snippet = src.text.take(80).replace("\n", " ") + if (src.text.length > 80) "…" else ""
+                val snippet = src.text.take(80).replace("\n", " ") +
+                    if (src.text.length > 80) "…" else ""
                 snippet to pct
             }
         }
 
-        // Нормализация процентов примерно к 100
-        val sum = thinking.sumOf { it.second }
-        val normalized = if (sum > 0) {
-            thinking.mapIndexed { i, (t, p) ->
-                if (i == 0) t to (p + (100 - sum)).coerceAtLeast(5) else t to p
+        val sum = thinking.sumOf { pair -> pair.second }
+        val normalized = if (sum > 0 && thinking.isNotEmpty()) {
+            thinking.mapIndexed { index, (text, pct) ->
+                if (index == 0) text to (pct + (100 - sum)).coerceAtLeast(5) else text to pct
             }
-        } else thinking
+        } else {
+            thinking
+        }
 
         val best = top.firstOrNull()
-        val confidence = if (best == null) 12 else ((best.second * 80) + 15).toInt().coerceIn(10, 92)
+        val confidence = if (best == null) {
+            12
+        } else {
+            ((best.second * 80) + 15).toInt().coerceIn(10, 92)
+        }
 
-        var answer = if (best == null) {
+        val answer = if (best == null) {
             "Пока не нашёл достаточно близкой информации. Добавь больше текстов по теме."
         } else {
-            val snippet = extractSnippet(best.first.text, tokens)
-            var text = snippet
-            if (feedbackNotes.any { it.contains("сухо") || it.contains("непонятно") }) {
+            var text = extractSnippet(best.first.text, tokens)
+            if (feedbackNotes.any { note -> note.contains("сухо") || note.contains("непонятно") }) {
                 text = "Попробую объяснить понятнее:\n\n$text"
             }
             if (confidence >= 60) {
-                text += listOf("", "\n\nМогу рассказать подробнее.", "\n\nА что ты об этом думаешь?").random()
+                text += listOf(
+                    "",
+                    "\n\nМогу рассказать подробнее.",
+                    "\n\nА что ты об этом думаешь?"
+                ).random()
             } else if (confidence < 35) {
                 text += "\n\n(Уверенность пока невысокая)"
             }
@@ -227,19 +253,24 @@ class LuntikViewModel : ViewModel() {
     }
 
     private fun extractSnippet(text: String, tokens: List<String>): String {
-        val sentences = text.split(Regex("[.!?\n]+")).map { it.trim() }.filter { it.length > 15 }
+        val sentences = text.split(Regex("[.!?\n]+"))
+            .map { s -> s.trim() }
+            .filter { s -> s.length > 15 }
         if (sentences.isEmpty()) return text.take(300)
         val best = sentences.maxByOrNull { s ->
-            tokens.count { s.lowercase().contains(it) }
+            tokens.count { token -> s.lowercase().contains(token) }
         } ?: sentences.first()
         return if (best.length > 400) best.take(400) + "…" else best
     }
 
     fun like(msgId: String) {
-        messages = messages.map {
-            if (it.id == msgId) it.copy(feedback = "like") else it
+        messages = messages.map { msg ->
+            if (msg.id == msgId) msg.copy(feedback = "like") else msg
         }
-        messages = messages + ChatMessage(role = "system", content = "👍 Спасибо! Буду стараться отвечать так же.")
+        messages = messages + ChatMessage(
+            role = "system",
+            content = "👍 Спасибо! Буду стараться отвечать так же."
+        )
     }
 
     fun openDislike(msgId: String) {
@@ -251,8 +282,8 @@ class LuntikViewModel : ViewModel() {
     fun submitDislike() {
         val id = feedbackMsgId ?: return
         val comment = feedbackComment.trim()
-        messages = messages.map {
-            if (it.id == id) it.copy(feedback = "dislike") else it
+        messages = messages.map { msg ->
+            if (msg.id == id) msg.copy(feedback = "dislike") else msg
         }
         if (comment.isNotEmpty()) {
             feedbackNotes.add(comment.lowercase())
@@ -261,7 +292,10 @@ class LuntikViewModel : ViewModel() {
                 content = "Понял замечание: «$comment». Буду учитывать."
             )
         } else {
-            messages = messages + ChatMessage(role = "system", content = "Понял, ответ не зашёл.")
+            messages = messages + ChatMessage(
+                role = "system",
+                content = "Понял, ответ не зашёл."
+            )
         }
         showFeedbackDialog = false
     }
@@ -269,7 +303,6 @@ class LuntikViewModel : ViewModel() {
 
 @Composable
 fun LuntikApp(vm: LuntikViewModel = viewModel()) {
-    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     LaunchedEffect(vm.messages.size) {
@@ -278,16 +311,14 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         }
     }
 
-    // Когда isThinking стал true — запускаем finishThinking
     LaunchedEffect(vm.isThinking) {
         if (vm.isThinking) {
-            val lastUser = vm.messages.lastOrNull { it.role == "user" }?.content ?: ""
+            val lastUser = vm.messages.lastOrNull { msg -> msg.role == "user" }?.content ?: ""
             vm.finishThinking(lastUser)
         }
     }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
-        // Top bar
         Row(
             Modifier
                 .fillMaxWidth()
@@ -305,14 +336,13 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             )
         }
 
-        // Messages
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(vm.messages, key = { it.id }) { msg ->
+            items(vm.messages, key = { msg -> msg.id }) { msg ->
                 MessageBubble(
                     msg = msg,
                     onLike = { vm.like(msg.id) },
@@ -321,12 +351,16 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             }
             if (vm.isThinking) {
                 item {
-                    Text("💭 Думаю…", color = TextMuted, fontSize = 14.sp, modifier = Modifier.padding(8.dp))
+                    Text(
+                        "💭 Думаю…",
+                        color = TextMuted,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(8.dp)
+                    )
                 }
             }
         }
 
-        // Bottom actions
         Row(
             Modifier
                 .fillMaxWidth()
@@ -347,7 +381,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             }
         }
 
-        // Input
         Row(
             Modifier
                 .fillMaxWidth()
@@ -358,7 +391,7 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         ) {
             OutlinedTextField(
                 value = vm.input,
-                onValueChange = { vm.input = it },
+                onValueChange = { value -> vm.input = value },
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Напиши сообщение…", color = TextMuted) },
                 colors = OutlinedTextFieldDefaults.colors(
@@ -375,12 +408,15 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
                 onClick = { vm.send() },
                 colors = IconButtonDefaults.iconButtonColors(containerColor = Accent)
             ) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить", tint = Bg)
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Отправить",
+                    tint = Bg
+                )
             }
         }
     }
 
-    // Add source dialog
     if (vm.showAddDialog) {
         AlertDialog(
             onDismissRequest = { vm.showAddDialog = false },
@@ -389,14 +425,14 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
                 Column {
                     OutlinedTextField(
                         value = vm.newSourceName,
-                        onValueChange = { vm.newSourceName = it },
+                        onValueChange = { value -> vm.newSourceName = value },
                         label = { Text("Название") },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = vm.newSourceText,
-                        onValueChange = { vm.newSourceText = it },
+                        onValueChange = { value -> vm.newSourceText = value },
                         label = { Text("Текст") },
                         modifier = Modifier.fillMaxWidth().height(160.dp),
                         maxLines = 8
@@ -417,7 +453,6 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
         )
     }
 
-    // Dislike comment dialog
     if (vm.showFeedbackDialog) {
         AlertDialog(
             onDismissRequest = { vm.showFeedbackDialog = false },
@@ -425,7 +460,7 @@ fun LuntikApp(vm: LuntikViewModel = viewModel()) {
             text = {
                 OutlinedTextField(
                     value = vm.feedbackComment,
-                    onValueChange = { vm.feedbackComment = it },
+                    onValueChange = { value -> vm.feedbackComment = value },
                     placeholder = { Text("Например: слишком сухо, не по теме…") },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -477,7 +512,6 @@ fun MessageBubble(
                     Spacer(Modifier.height(4.dp))
                 }
 
-                // Thinking block
                 if (!msg.thinking.isNullOrEmpty()) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.25f),
@@ -492,7 +526,12 @@ fun MessageBubble(
                                     Modifier.fillMaxWidth().padding(vertical = 2.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text(text, color = TextMain, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                                    Text(
+                                        text,
+                                        color = TextMain,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier.weight(1f)
+                                    )
                                     Text(
                                         "$pct%",
                                         color = when {
@@ -534,14 +573,32 @@ fun MessageBubble(
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = onLike, contentPadding = PaddingValues(4.dp)) {
-                            Icon(Icons.Default.ThumbUp, null, Modifier.size(16.dp), tint = if (msg.feedback == "like") Accent else TextMuted)
+                            Icon(
+                                Icons.Default.ThumbUp,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (msg.feedback == "like") Accent else TextMuted
+                            )
                             Spacer(Modifier.width(4.dp))
-                            Text("Лайк", color = if (msg.feedback == "like") Accent else TextMuted, fontSize = 12.sp)
+                            Text(
+                                "Лайк",
+                                color = if (msg.feedback == "like") Accent else TextMuted,
+                                fontSize = 12.sp
+                            )
                         }
                         TextButton(onClick = onDislike, contentPadding = PaddingValues(4.dp)) {
-                            Icon(Icons.Default.ThumbDown, null, Modifier.size(16.dp), tint = if (msg.feedback == "dislike") Danger else TextMuted)
+                            Icon(
+                                Icons.Default.ThumbDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (msg.feedback == "dislike") Danger else TextMuted
+                            )
                             Spacer(Modifier.width(4.dp))
-                            Text("Дизлайк", color = if (msg.feedback == "dislike") Danger else TextMuted, fontSize = 12.sp)
+                            Text(
+                                "Дизлайк",
+                                color = if (msg.feedback == "dislike") Danger else TextMuted,
+                                fontSize = 12.sp
+                            )
                         }
                     }
                 }
