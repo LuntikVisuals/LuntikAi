@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Базовые цвета (могут переопределяться темой из настроек)
 var Bg = Color(0xFF0C0E12)
 var SurfaceC = Color(0xFF161A22)
 var Surface2 = Color(0xFF1E2430)
