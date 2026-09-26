@@ -21,6 +21,18 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'tools platform-tools platforms;android-34 build-tools;34.0.0'
+          accept-android-sdk-licenses: true
+
+      - name: Accept Android licenses
+        run: |
+          yes | sdkmanager --licenses || true
+          mkdir -p $ANDROID_HOME/licenses
+          echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > $ANDROID_HOME/licenses/android-sdk-license
+          echo -e "84831b9409646a918e30573bab4c9c91346d8abd\n" > $ANDROID_HOME/licenses/android-sdk-preview-license
+          echo -e "d975f751698a77b662f1254ddbeed3901e976f5a\n" > $ANDROID_HOME/licenses/intel-android-extra-license
+          echo -e "33b6a2b64607f11b759f320ef9dff4ae8c87d171\n" > $ANDROID_HOME/licenses/google-gdk-license
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
