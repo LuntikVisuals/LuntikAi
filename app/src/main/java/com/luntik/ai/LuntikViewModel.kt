@@ -28,7 +28,7 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         listOf(
             ChatMessage(
                 role = "system",
-                content = "LuntikAi v0.5\n\n• Чаты\n• Подсказки после ответа\n• /create skill — свой навык\n• Песочница, Python/JS/C++\n• Профиль и персонализация"
+                content = "LuntikAi v0.5\n\n• Чаты слева/справа\n• Подсказки после ответа\n• /create skill — свой навык\n• Песочница, Python/JS/C++\n• Профиль и персонализация"
             )
         )
     )
@@ -86,16 +86,16 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         Accent = Color(theme.accent)
         Bg = Color(theme.background)
         SurfaceC = Color(theme.surface)
-        Surface2 = Color(
-            red = (Color(theme.surface).red * 1.12f).coerceAtMost(1f),
-            green = (Color(theme.surface).green * 1.12f).coerceAtMost(1f),
-            blue = (Color(theme.surface).blue * 1.12f).coerceAtMost(1f)
-        )
-        UserBubble = Color(
-            Color(theme.surface).red * 0.9f + 0.1f,
-            Color(theme.surface).green * 0.9f + 0.12f,
-            Color(theme.surface).blue * 0.95f + 0.2f
-        )
+        Surface2 = Color(theme.surface).copy(alpha = 1f).let {
+            Color(
+                red = (it.red * 1.12f).coerceAtMost(1f),
+                green = (it.green * 1.12f).coerceAtMost(1f),
+                blue = (it.blue * 1.12f).coerceAtMost(1f)
+            )
+        }
+        UserBubble = Color(theme.surface).copy(alpha = 1f).let {
+            Color(it.red * 0.9f + 0.1f, it.green * 0.9f + 0.12f, it.blue * 0.95f + 0.2f)
+        }
         AiBubble = Color(theme.surface)
     }
 
@@ -430,7 +430,11 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun defaultSuggestions() = listOf("что ты умеешь?", "тон чуть вежливее", "/create skill помощник | отвечай коротко")
+    private fun defaultSuggestions() = listOf(
+        "что ты умеешь?",
+        "тон чуть вежливее",
+        "/create skill помощник | отвечай коротко и по делу"
+    )
 
     fun saveSandbox(name: String, language: String, content: String) {
         val n = name.ifBlank { "file_${sandbox.size + 1}" }
@@ -445,7 +449,7 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         val c = file.content
         val outs = Regex("""(?:print|console\\.log|cout\\s*<<)\\s*\\(?\\s*[\"']([^\"']*)[\"']""").findAll(c).map { it.groupValues[1] }.toList()
         return if (outs.isNotEmpty()) "Вывод (${file.name}):\n" + outs.joinToString("\n")
-        else "Файл «${file.name}». Код:\n${c.take(400)}"
+        else "Файл «${file.name}». Полный интерпретатор ограничен. Код:\n${c.take(400)}"
     }
 
     fun runSandboxUi(file: SandboxFile) {
@@ -457,8 +461,21 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
-    private fun pushAi(c: String, conf: Int, actions: List<String>, thinking: List<Pair<String, Int>>? = null, suggestions: List<String>? = null) {
-        messages = messages + ChatMessage(role = "ai", content = c, confidence = conf, actions = actions, thinking = thinking, suggestions = suggestions)
+    private fun pushAi(
+        c: String,
+        conf: Int,
+        actions: List<String>,
+        thinking: List<Pair<String, Int>>? = null,
+        suggestions: List<String>? = null
+    ) {
+        messages = messages + ChatMessage(
+            role = "ai",
+            content = c,
+            confidence = conf,
+            actions = actions,
+            thinking = thinking,
+            suggestions = suggestions
+        )
         persist()
     }
 
@@ -469,7 +486,7 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         Personality.VILLAIN -> "Ха…\n\n$raw"
         Personality.KIND -> "С радостью 💛\n\n$raw"
         Personality.CUTE -> "Хехе~\n\n$raw 🥺"
-        Personality.HUMORIST -> listOf("Без обид:", "Лунтик одобрил:").random() + "\n\n$raw\n\n(Развлечение.)"
+        Personality.HUMORIST -> listOf("Без обид, чисто юмор:", "Лунтик одобрил:").random() + "\n\n$raw\n\n(Это развлечение.)"
     }
 
     fun like(id: String) {
