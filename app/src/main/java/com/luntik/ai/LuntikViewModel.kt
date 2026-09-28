@@ -28,7 +28,7 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         listOf(
             ChatMessage(
                 role = "system",
-                content = "LuntikAi v0.5\n\n• Чаты\n• Подсказки\n• /create skill\n• Песочница"
+                content = "LuntikAi v0.6\n\nЛокальный агент: знания, скиллы, песочница, OCR текста с фото, распознавание речи.\n/create skill имя | описание"
             )
         )
     )
@@ -64,6 +64,23 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
     var feedbackMsgId by mutableStateOf<String?>(null)
     var feedbackComment by mutableStateOf("")
     var showProfile by mutableStateOf(false)
+
+    // OCR / speech results feed
+    fun onOcrText(text: String) {
+        if (text.isBlank()) {
+            messages = messages + ChatMessage(role = "system", content = "На фото текст не найден.")
+            return
+        }
+        addSource("OCR ${System.currentTimeMillis() % 100000}", text)
+        messages = messages + ChatMessage(role = "system", content = "Текст с фото добавлен в знания (${text.length} символов). Нажми Обучить.")
+        persist()
+    }
+
+    fun onSpeechText(text: String) {
+        if (text.isNotBlank()) {
+            input = text
+        }
+    }
 
     private fun allSources(): List<KnowledgeSource> {
         val skillSources = userSkills.map {
@@ -257,7 +274,7 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         persistSessionMessages()
         val s = ChatSession(
             title = "Чат ${sessions.size + 1}",
-            messages = listOf(ChatMessage(role = "system", content = "Новый чат. /create skill …"))
+            messages = listOf(ChatMessage(role = "system", content = "Новый чат. /create skill"))
         )
         sessions = listOf(s) + sessions
         activeSessionId = s.id
@@ -316,7 +333,7 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
         isTrained = true
         messages = messages + ChatMessage(
             role = "system",
-            content = "Готово. Скиллы: ${userSkills.size}, источников: ${sources.size}."
+            content = "Обучено. Скиллы: ${userSkills.size}, источников: ${sources.size}, встроено: ${BuiltinSkills.all().size}."
         )
         persist()
     }
@@ -348,7 +365,7 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectPersonality(p: Personality) {
         personality = p
-        messages = messages + ChatMessage(role = "system", content = "Личность: ${p.emoji} ${p.title}")
+        messages = messages + ChatMessage(role = "system", content = "Личность: ${p.title}")
         persist()
     }
 
@@ -390,27 +407,27 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
 
         when {
             lower in listOf("привет", "хай", "здравствуй", "здравствуйте") -> {
-                pushAi(style("Привет! Я ИИ Лунтика — чем могу помочь?"), 92, listOf("Приветствие"), suggestions = defaultSuggestions())
+                pushAi(style("Привет. Я LuntikAi — локальный агент. Чем помочь?"), 92, listOf("Приветствие"), suggestions = defaultSuggestions())
                 return
             }
             lower.contains("что ты умеешь") || lower.contains("что умеешь") -> {
                 val help =
-                    "Я умею:\n• знания и скиллы\n• Python / JS / C++\n• песочницу\n• /create skill\n• чаты\nСкиллов: ${userSkills.size}."
+                    "Возможности:\n• поиск по знаниям и скиллам\n• Python / JS / C++\n• песочница кода\n• /create skill имя | описание\n• OCR текста с фото\n• распознавание речи\n• несколько чатов\nСкиллов: ${userSkills.size}."
                 pushAi(style(help), 90, listOf("Возможности"), suggestions = defaultSuggestions())
                 return
             }
             lower.contains("вежливее") -> {
                 selectPersonality(Personality.KIND)
-                pushAi(style("Хорошо, переключусь на более мягкий тон."), 88, listOf("Смена тона"), suggestions = defaultSuggestions())
+                pushAi(style("Переключаюсь на более мягкий тон."), 88, listOf("Смена тона"), suggestions = defaultSuggestions())
                 return
             }
             lower.contains("песочниц") || lower == "sandbox" -> {
                 val list = if (sandbox.isEmpty()) {
-                    "Песочница пуста. Пример: создай файл hello.py"
+                    "Песочница пуста. Пример: создай файл hello.py : print(\"hi\")"
                 } else {
-                    sandbox.joinToString("\n") { "• ${it.name} (${it.language})" }
+                    sandbox.joinToString("\n") { "- ${it.name} (${it.language})" }
                 }
-                pushAi(style(list), 88, listOf("Песочница"), suggestions = listOf("создай файл hello.py"))
+                pushAi(style(list), 88, listOf("Песочница"), suggestions = listOf("создай файл hello.py : print(\"hi\")"))
                 return
             }
             lower.startsWith("создай файл") || lower.startsWith("создать файл") || lower.contains("сделай файл") -> {
@@ -426,7 +443,7 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 saveSandbox(name, lang, code)
                 pushAi(
-                    style("Создал «$name» ($lang). Можно: запусти $name"),
+                    style("Создал «$name» ($lang). Команда: запусти $name"),
                     90,
                     listOf("Песочница", "Создал $name"),
                     suggestions = listOf("запусти $name", "что ты умеешь?")
@@ -455,75 +472,70 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
 
     fun finishThinking(question: String) {
         viewModelScope.launch {
-            delay(350)
+            delay(300)
             if (!isTrained) {
                 index.build(allSources())
                 isTrained = true
             }
             val scored = allSources().map { it to index.score(question, it.text) }.sortedByDescending { it.second }
             val top = scored.take(3).filter { it.second > 0.0001 }
-            val thinking = if (top.isEmpty()) {
-                listOf("Нет совпадений" to 70, "Общие навыки" to 30)
-            } else {
+            val thinking = if (top.isEmpty()) listOf("Нет совпадений" to 70, "Общие навыки" to 30)
+            else {
                 val total = top.sumOf { it.second }.coerceAtLeast(0.0001)
                 top.map { (s, sc) -> s.name.take(40) to ((sc / total) * 100).toInt().coerceIn(5, 90) }
             }
             val best = top.firstOrNull()
             val conf = if (best == null) 15 else (22 + (best.second * 38).toInt()).coerceIn(12, 93)
-            val ans = if (best == null) {
-                "Мало данных. Спроси про Python/JS/C++ или /create skill."
+            val qLower = question.lowercase()
+            val lead = when {
+                qLower.startsWith("что такое") || qLower.startsWith("что это") -> "Кратко: "
+                qLower.startsWith("как ") -> "Можно так: "
+                qLower.contains("python") || qLower.contains("питон") -> "По Python: "
+                qLower.contains("javascript") || qLower.contains(" js") -> "По JavaScript: "
+                qLower.contains("c++") || qLower.contains("cpp") -> "По C++: "
+                else -> "По запросу: "
+            }
+            var ans = if (best == null) {
+                "Мало данных в знаниях. Добавь текст, скилл или сфотографируй текст (OCR)."
             } else {
                 val tokens = TfIdfIndex.tokenize(question)
                 val bits = top.take(2).flatMap { src ->
                     src.first.text.split(Regex("[.\\n]+")).map { it.trim() }.filter { it.length > 10 }
                         .sortedByDescending { line -> tokens.count { line.lowercase().contains(it) } }.take(2)
                 }.distinct().take(4)
-                "По твоему вопросу: " + bits.joinToString(". ") { it.trim().trimEnd('.') } + "."
+                lead + bits.joinToString(". ") { it.trim().trimEnd('.') } + "."
             }
-            pushAi(
-                style(ans),
-                conf,
-                listOf("Поиск", "Личность: ${personality.title}"),
-                thinking,
-                defaultSuggestions()
-            )
+            ans = style(ans)
+            pushAi(ans, conf, listOf("Поиск", "Перефраз", "Личность: ${personality.title}"), thinking, defaultSuggestions())
             isThinking = false
         }
     }
 
     private fun defaultSuggestions() = listOf(
         "что ты умеешь?",
-        "привет",
-        "создай файл hello.py"
+        "тон чуть вежливее",
+        "/create skill помощник | отвечай коротко и по делу"
     )
 
-    private fun saveSandbox(name: String, language: String, content: String) {
-        val existing = sandbox.find { it.name.equals(name, true) }
-        sandbox = if (existing != null) {
-            sandbox.map { if (it.id == existing.id) it.copy(content = content, language = language) else it }
-        } else {
-            sandbox + SandboxFile(name = name, language = language, content = content)
-        }
+    fun saveSandbox(name: String, language: String, content: String) {
+        val n = name.ifBlank { "file_${sandbox.size + 1}" }
+        val old = sandbox.find { it.name == n }
+        sandbox = if (old != null) sandbox.map {
+            if (it.id == old.id) it.copy(content = content, language = language) else it
+        } else sandbox + SandboxFile(name = n, language = language, content = content)
+        messages = messages + ChatMessage(role = "system", content = "Песочница: «$n» ($language)")
         persist()
     }
 
-    private fun runSandbox(file: SandboxFile): String {
+    fun runSandbox(file: SandboxFile): String {
         val c = file.content
-        val outs = Regex("print\\(([^)]*)\\)").findAll(c).map { it.groupValues[1] }.toList()
-        return if (outs.isNotEmpty()) {
-            "Вывод (${file.name}):\n" + outs.joinToString("\n")
-        } else {
-            "Файл «${file.name}». Код:\n${c.take(400)}"
-        }
+        val outs = Regex("""(?:print|console\\.log|cout\\s*<<)\\s*\\(?\\s*[\"']([^\"']*)[\"']""").findAll(c).map { it.groupValues[1] }.toList()
+        return if (outs.isNotEmpty()) "Вывод (${file.name}):\n" + outs.joinToString("\n")
+        else "Файл «${file.name}». Интерпретатор ограничен. Код:\n${c.take(400)}"
     }
 
     fun runSandboxUi(file: SandboxFile) {
-        pushAi(
-            style(runSandbox(file)),
-            72,
-            listOf("Песочница", "Запуск ${file.name}"),
-            suggestions = defaultSuggestions()
-        )
+        pushAi(style(runSandbox(file)), 72, listOf("Песочница", "Запуск ${file.name}"), suggestions = defaultSuggestions())
     }
 
     fun deleteSandbox(id: String) {
@@ -551,12 +563,12 @@ class LuntikViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun style(raw: String) = when (personality) {
         Personality.NONE -> raw
-        Personality.HORROR -> "Шёпот…\n\n$raw"
-        Personality.EGOIST -> "Очевидно:\n\n$raw"
-        Personality.VILLAIN -> "Ха…\n\n$raw"
-        Personality.KIND -> "С радостью\n\n$raw"
-        Personality.CUTE -> "Хехе~\n\n$raw"
-        Personality.HUMORIST -> "Без обид, чисто юмор:\n\n$raw\n\n(Это развлечение.)"
+        Personality.HORROR -> "Тихо.\n\n$raw"
+        Personality.EGOIST -> "Очевидно.\n\n$raw"
+        Personality.VILLAIN -> "Хм.\n\n$raw"
+        Personality.KIND -> "С радостью.\n\n$raw"
+        Personality.CUTE -> "Хех.\n\n$raw"
+        Personality.HUMORIST -> "Чисто юмор, без обид:\n\n$raw\n\n(Развлечение.)"
     }
 
     fun like(id: String) {
