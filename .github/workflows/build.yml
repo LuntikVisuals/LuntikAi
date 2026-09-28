@@ -11,61 +11,52 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
           accept-android-sdk-licenses: true
 
-      - name: Accept Android licenses
+      - name: Licenses
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           mkdir -p $ANDROID_HOME/licenses
           echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > $ANDROID_HOME/licenses/android-sdk-license
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
 
-      - name: Create Gradle Wrapper
+      - name: Wrapper
         run: |
           gradle wrapper --gradle-version 8.9 || true
           chmod +x gradlew || true
 
-      - name: Build Debug APK
+      - name: Build
         run: |
-          if [ -f ./gradlew ]; then
-            ./gradlew assembleDebug --stacktrace --no-daemon
-          else
-            gradle assembleDebug --stacktrace --no-daemon
-          fi
+          if [ -f ./gradlew ]; then ./gradlew assembleDebug --stacktrace --no-daemon
+          else gradle assembleDebug --stacktrace --no-daemon; fi
 
-      - name: Prepare release APK
+      - name: Prepare APK
         if: success()
         run: |
           mkdir -p release
           cp app/build/outputs/apk/debug/*.apk release/LuntikAi.apk
+          ls -la release/
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         if: success()
         with:
           name: luntikai-debug-apk
           path: release/LuntikAi.apk
           retention-days: 14
 
-      - name: Create / Update GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         if: success()
         with:
           tag_name: latest
